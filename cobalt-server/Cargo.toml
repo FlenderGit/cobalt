@@ -1,0 +1,18 @@
+[package]
+name = "cobalt-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = {workspace = true}
+cobalt-protocol = { path = "../cobalt-protocol" }
+cobalt-net = { path = "../cobalt-net" }
+cobalt-sdk = { path = "../cobalt-sdk" }
+enum_dispatch = "0.3.13"
+derive-new = { workspace = true }
+reqwest = { version = "0.13", features = ["json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+tokio-util = "0.7.18"
+futures-util = "0.3.32"

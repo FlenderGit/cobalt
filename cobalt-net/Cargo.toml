@@ -1,0 +1,11 @@
+[package]
+name = "cobalt-net"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true }
+cobalt-protocol = { path = "../cobalt-protocol" }
+cobalt-sdk = { path = "../cobalt-sdk" }
+cobalt-derive = { path = "../cobalt-derive" }
+derive-new= { workspace = true }

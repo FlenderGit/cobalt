@@ -1,0 +1,19 @@
+[package]
+name = "cobalt-protocol"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["async"]
+async = ["tokio"]
+sync = []
+
+[dependencies]
+tracing = { workspace = true }
+tokio = { workspace = true, optional = true }
+thiserror = { workspace = true }
+flate2 = "1.1.9"
+openssl = "0.10.78"
+num-bigint = "0.4.6"
+tokio-util = "0.7.18"
+bytes = "1.11.1"

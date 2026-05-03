@@ -1,0 +1,9 @@
+[package]
+name = "cobalt-sdk"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cobalt-protocol = { path = "../cobalt-protocol" }
+tokio = { workspace = true }
+thiserror = { workspace = true }
