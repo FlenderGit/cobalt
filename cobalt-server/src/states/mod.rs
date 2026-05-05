@@ -1,7 +1,7 @@
 use cobalt_protocol::{
     Encode, RawBytesArray,
     chunk::ChunkBuilder,
-    crypto::{SessionCrypto, generate_verify_token, minecraft_hash, rsa_decrypt},
+    crypto::{SessionCrypto, generate_pairs, generate_verify_token, minecraft_hash, rsa_decrypt},
 };
 use std::{io, sync::atomic::Ordering, time::Duration};
 
@@ -45,7 +45,7 @@ impl AState {
 pub trait State {
     async fn handle<W: AsyncWriteExt + Unpin>(
         &mut self,
-        packet: RawPacket,
+        packet: Packet,
         ctx: &mut ConnContext<W>,
     ) -> Result<Transition, PacketError>;
     async fn on_enter<W: AsyncWriteExt + Unpin>(
@@ -73,7 +73,7 @@ pub struct PlayState {
 impl State for HandshakeState {
     async fn handle<W: AsyncWriteExt>(
         &mut self,
-        _packet: RawPacket,
+        _packet: Packet,
         _ctx: &mut ConnContext<W>,
     ) -> Result<Transition, PacketError> {
         match parse_packet::<ServerHandshakeClient>(&_packet)? {
@@ -107,7 +107,7 @@ impl State for HandshakeState {
 impl State for StatusState {
     async fn handle<W: AsyncWriteExt + Unpin>(
         &mut self,
-        _packet: RawPacket,
+        _packet: Packet,
         _ctx: &mut ConnContext<W>,
     ) -> Result<Transition, PacketError> {
         match parse_packet::<ServerStatusClient>(&_packet)? {
@@ -149,7 +149,7 @@ pub fn encode_string(s: &str) -> Vec<u8> {
 impl State for LoginState {
     async fn handle<W: AsyncWriteExt + Unpin>(
         &mut self,
-        _packet: RawPacket,
+        _packet: Packet,
         _ctx: &mut ConnContext<W>,
     ) -> Result<Transition, PacketError> {
         match parse_packet::<ClientLoginPacket>(&_packet)? {
@@ -165,8 +165,7 @@ impl State for LoginState {
                         "".to_string(),
                         crypto.public_key_der.clone(),
                         verify_token.to_vec(),
-                    )
-                    .to_packet()?;
+                    );
                     _ctx.send_packet(packet).await?;
 
                     // Print size of public key
@@ -176,26 +175,17 @@ impl State for LoginState {
                     return Ok(Transition::Same);
                 }
 
-                let treshhold = _ctx.server_state.config.threshold;
-                let packet = SetCompression::new(VarInt::new(treshhold as i32)).to_packet()?;
-                _ctx.send_packet(packet).await?;
-                _ctx.compression_threshold = Some(treshhold);
+                _ctx.activate_compression().await?;
 
                 // mode offline
-                if true {
-                    let uuid = format!(
-                        "00000000-0000-3000-{:04x}-{:012x}",
-                        username.len(),
-                        username.bytes().fold(0u64, |a, b| a ^ b as u64)
-                    );
+                let uuid = format!(
+                    "00000000-0000-3000-{:04x}-{:012x}",
+                    username.len(),
+                    username.bytes().fold(0u64, |a, b| a ^ b as u64)
+                );
 
-                    let mut data = Vec::new();
-                    data.extend_from_slice(&encode_string(&uuid));
-                    data.extend_from_slice(&encode_string(&username));
-
-                    let packet = Packet::new(0x02, data);
-                    _ctx.send_packet(packet).await?;
-                }
+                let packet = LoginSuccess::new(uuid, username.clone());
+                _ctx.send_packet(packet).await?;
 
                 Ok(Transition::Next(PlayState { username }.into()))
             }
@@ -256,7 +246,9 @@ impl State for LoginState {
                 let uuid = format_uuid(&profile.id);
 
                 info!("Auth OK: {} ({})", profile.name, uuid);
-                _ctx.session_crypto = Some(SessionCrypto::new(&key)?);
+                let (encryptor, decryptor) = generate_pairs(&key)?;
+                _ctx.framed.decoder_mut().decryptor = Some(decryptor);
+                _ctx.session_crypto = Some(SessionCrypto { encryptor });
 
                 // Before chiffrement
 
@@ -264,7 +256,8 @@ impl State for LoginState {
                 // calculate hash from shared_token  and public key
                 // send to mojang
                 // if success, continue
-                let packet = LoginSuccess::new(uuid, profile.name).to_packet()?;
+                _ctx.activate_compression().await?;
+                let packet = LoginSuccess::new(uuid, profile.name);
                 _ctx.send_packet(packet).await?;
 
                 _ctx.tx.flush().await?;
@@ -294,8 +287,7 @@ impl State for PlayState {
             20,
             WorldType::Default,
             false,
-        )
-        .to_packet()?;
+        );
 
         _ctx.send_packet(packet).await?;
 
@@ -304,7 +296,7 @@ impl State for PlayState {
             0f64, 64f64, 0f64, 0f32, 0f32, 0,
             // VarInt::new(0),
         );
-        _ctx.send_packet(packet.to_packet()?).await?;
+        _ctx.send_packet(packet).await?;
 
         // Send chunk test
         let chunk = ChunkBuilder {
@@ -322,8 +314,7 @@ impl State for PlayState {
             0b0000_0000_0001_1111,
             VarInt::new(data.len() as i32),
             RawBytesArray(data),
-        )
-        .to_packet()?;
+        );
         // info!(
         //     "🧱 Sending ChunkData: size={}, first_bytes={:02x}{:02x}{:02x}{:02x}",
         //     raw.data.len(),
@@ -346,7 +337,7 @@ impl State for PlayState {
 
     async fn handle<W: AsyncWriteExt + Unpin>(
         &mut self,
-        _packet: RawPacket,
+        _packet: Packet,
         _ctx: &mut ConnContext<W>,
     ) -> Result<Transition, PacketError> {
         match parse_packet::<ClientPlayPacket>(&_packet)? {
@@ -357,7 +348,7 @@ impl State for PlayState {
                     r#"{{"text":"<{}> {}","color":"white"}}"#,
                     self.username, message
                 );
-                let packet = ChatMessage::new(json, 0).to_packet()?;
+                let packet = ChatMessage::new(json, 0);
                 _ctx.send_packet(packet).await?;
 
                 Ok(Transition::Same)

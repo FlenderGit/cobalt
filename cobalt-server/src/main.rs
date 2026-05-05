@@ -24,6 +24,7 @@ async fn main() -> io::Result<()> {
 
     let mut config = ServerConfig::new(addr, crypto);
     config.description = "A Cobalt server".to_string();
+    // config.threshold = 0;
 
     Server::new(config).run().await
 }

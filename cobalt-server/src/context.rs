@@ -5,13 +5,18 @@ use std::{
     time::Instant,
 };
 
-use cobalt_net::packet::server::KeepAlive;
+use cobalt_net::packet::server::{KeepAlive, SetCompression};
 use cobalt_protocol::{
     Encode, PacketId,
-    codex::MinecraftCodex,
+    codex::{DecryptingReader, MinecraftCodex},
     crypto::{CryptoConfig, SessionCrypto},
-    packet::{Packet, PacketError, RawPacket},
-    types::{serialize::read_varint, varint::VarInt},
+    packet::{
+        Packet, PacketError, RawPacket, compress_payload, compress_zlib_bytes, decompress_packet,
+    },
+    types::{
+        serialize::{read_varint, write_varint},
+        varint::VarInt,
+    },
 };
 use cobalt_sdk::{Difficulty, Dimension, Gamemode};
 use futures_util::stream::StreamExt;
@@ -19,8 +24,12 @@ use tokio::{
     io::AsyncWriteExt,
     net::{TcpStream, tcp::OwnedReadHalf},
     sync::RwLock,
+    time::Interval,
 };
-use tokio_util::codec::FramedRead;
+use tokio_util::{
+    bytes::{Buf, BufMut, BytesMut},
+    codec::FramedRead,
+};
 use tracing::info;
 
 pub struct ConnContext<W: AsyncWriteExt> {
@@ -30,76 +39,63 @@ pub struct ConnContext<W: AsyncWriteExt> {
     pub session_crypto: Option<SessionCrypto>,
     pub tx: W,
     pub server_state: Arc<ServerState>,
-    // pub framed: FramedRead<OwnedReadHalf, MinecraftCodex>,
+    pub framed: FramedRead<OwnedReadHalf, MinecraftCodex>,
 }
 
 impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
     pub async fn send_keepalive(&mut self) -> Result<(), PacketError> {
         let keepalive_id = VarInt::new(23);
         info!("Sending keepalive");
-        let packet = KeepAlive::new(keepalive_id).to_packet()?;
+        let packet = KeepAlive::new(keepalive_id);
         self.send_packet(packet).await?;
         self.pending_keepalive = Some((keepalive_id.val(), Instant::now()));
         Ok(())
     }
 
-    pub async fn send_packet(&mut self, packet: Packet) -> Result<(), PacketError> {
-        let raw = if let Some(compression_threshold) = self.compression_threshold {
-            if packet.len() >= compression_threshold as usize {
-                packet.compress(compression_threshold)?
-            } else {
-                let plain_raw = packet.to_raw();
-                let data_length_zero = VarInt::new(0);
-                let mut buf =
-                    Vec::with_capacity(data_length_zero.len() as usize + plain_raw.data.len());
-                data_length_zero.encode(&mut buf).expect("encode failed");
-                buf.extend_from_slice(&plain_raw.data);
-                RawPacket { data: buf }
-            }
+    pub async fn send_packet(&mut self, packet: impl PacketId) -> io::Result<()> {
+        let payload = packet.to_bytes()?;
+
+        let mut inner = if let Some(threshold) = self.compression_threshold {
+            compress_payload(payload, threshold)?
         } else {
-            packet.to_raw()
+            payload // Pas de compression
         };
 
-        let varint = VarInt::new(raw.len() as i32).to_bytes();
+        let mut full_frame = BytesMut::with_capacity(5 + inner.len());
+        write_varint(&mut full_frame, inner.len() as i32); // ← Seul Packet Length
+        full_frame.put(inner);
 
-        if let Some(session_crypto) = &mut self.session_crypto {
-            // Tout est chiffré, y compris le Packet Length
-            let mut full = Vec::with_capacity(varint.len() + raw.data.len());
-            full.extend_from_slice(&varint);
-            full.extend_from_slice(&raw.data);
-            let encrypted = session_crypto.encryptor.encrypt(&full)?;
-            self.tx.write_all(&encrypted).await?;
-        } else {
-            self.tx.write_all(&varint).await?;
-            self.tx.write_all(&raw.data).await?;
+        if let Some(crypto) = &mut self.session_crypto {
+            full_frame = crypto.encryptor.encrypt_bytes(&full_frame)?;
         }
 
+        self.tx.write_all(&full_frame).await?;
         self.tx.flush().await?;
         Ok(())
     }
 
-    // pub async fn read_packet(&mut self) -> Result<Option<RawPacket>, io::Error> {
-    //     let Some(frame) = self.framed.next().await.transpose()? else {
-    //         return Ok(None);
-    //     };
+    pub async fn read_packet(&mut self) -> Result<Option<Packet>, io::Error> {
+        let Some(frame) = self.framed.next().await.transpose()? else {
+            return Ok(None);
+        };
 
-    //     let decrypted = if let Some(session_crypto) = &mut self.session_crypto {
-    //         session_crypto.decryptor.decrypt(frame)
-    //     } else {
-    //         frame
-    //     }
+        info!("Received frame: {frame:?}");
 
-    //     let mut payload = if let Some(treshold) = self.compression_threshold {
-    //         Some(_) = todo!(),
-    //         None => decrypted,
-    //     };
+        Ok(Some(Packet::new_with_bytes(frame.id, frame.data)))
+    }
 
-    //     let (id, id_len) = read_varint(&payload)
-    //         .ok_or_else(|| anyhow::anyhow!("invalid packet id"))?;
-    //     payload.advance(id_len);
-
-    //     Ok(Some(RawPacket { id: id as u8, data: payload }))
-    // }
+    pub async fn activate_compression(&mut self) -> io::Result<()> {
+        let treshhold = self.server_state.config.threshold;
+        if treshhold == 0 {
+            info!("Compression disabled");
+            return Ok(());
+        }
+        let packet = SetCompression::new(VarInt::new(treshhold as i32));
+        self.send_packet(packet).await?;
+        self.compression_threshold = Some(treshhold);
+        self.framed.decoder_mut().threshold = Some(treshhold);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
