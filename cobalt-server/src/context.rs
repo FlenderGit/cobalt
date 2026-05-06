@@ -69,6 +69,8 @@ impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
             full_frame = crypto.encryptor.encrypt_bytes(&full_frame)?;
         }
 
+        info!("Sending frame: {full_frame:?}");
+
         self.tx.write_all(&full_frame).await?;
         self.tx.flush().await?;
         Ok(())
@@ -79,7 +81,7 @@ impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
             return Ok(None);
         };
 
-        info!("Received frame: {frame:?}");
+        // info!("Received frame: {frame:?}");
 
         Ok(Some(Packet::new_with_bytes(frame.id, frame.data)))
     }

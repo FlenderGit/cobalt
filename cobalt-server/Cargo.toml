@@ -13,6 +13,7 @@ cobalt-sdk = { path = "../cobalt-sdk" }
 enum_dispatch = "0.3.13"
 derive-new = { workspace = true }
 reqwest = { version = "0.13", features = ["json"] }
-serde = { version = "1.0.228", features = ["derive"] }
+serde = { workspace = true }
+uuid = { workspace = true }
 tokio-util = "0.7.18"
 futures-util = "0.3.32"

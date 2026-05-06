@@ -4,13 +4,17 @@ use cobalt_protocol::{
     crypto::{SessionCrypto, generate_pairs, generate_verify_token, minecraft_hash, rsa_decrypt},
 };
 use std::{io, sync::atomic::Ordering, time::Duration};
+use uuid::{Uuid, Variant};
 
 use cobalt_net::packet::{
     client::{
         ClientLoginPacket, ClientPlayPacket, ServerHandshakeClient, ServerStatusClient,
         parse_packet,
     },
-    server::{ChatMessage, ChunkData, EncryptionRequest, LoginSuccess, SetCompression},
+    server::{
+        ChatMessage, ChunkData, EncryptionRequest, EntityMetadata, LoginSuccess, MetadataEntries,
+        MetadataEntry, PlayerListItem, PlayerListItemData, SetCompression,
+    },
 };
 use cobalt_protocol::{
     PacketId,
@@ -178,13 +182,9 @@ impl State for LoginState {
                 _ctx.activate_compression().await?;
 
                 // mode offline
-                let uuid = format!(
-                    "00000000-0000-3000-{:04x}-{:012x}",
-                    username.len(),
-                    username.bytes().fold(0u64, |a, b| a ^ b as u64)
-                );
+                let uuid = Uuid::new_v3(&Uuid::NAMESPACE_OID, username.as_bytes());
 
-                let packet = LoginSuccess::new(uuid, username.clone());
+                let packet = LoginSuccess::new(uuid.to_string(), username.clone());
                 _ctx.send_packet(packet).await?;
 
                 Ok(Transition::Next(PlayState { username }.into()))
@@ -228,22 +228,23 @@ impl State for LoginState {
                     return Ok(Transition::Same);
                 };
 
-                pub fn format_uuid(uuid_no_dashes: &str) -> String {
-                    if uuid_no_dashes.len() != 32 {
-                        panic!("UUID must be 32 characters");
-                    }
+                // pub fn format_uuid(uuid_no_dashes: &str) -> String {
+                //     if uuid_no_dashes.len() != 32 {
+                //         panic!("UUID must be 32 characters");
+                //     }
 
-                    format!(
-                        "{}-{}-{}-{}-{}",
-                        &uuid_no_dashes[0..8],
-                        &uuid_no_dashes[8..12],
-                        &uuid_no_dashes[12..16],
-                        &uuid_no_dashes[16..20],
-                        &uuid_no_dashes[20..32]
-                    )
-                }
+                //     format!(
+                //         "{}-{}-{}-{}-{}",
+                //         &uuid_no_dashes[0..8],
+                //         &uuid_no_dashes[8..12],
+                //         &uuid_no_dashes[12..16],
+                //         &uuid_no_dashes[16..20],
+                //         &uuid_no_dashes[20..32]
+                //     )
+                // }
 
-                let uuid = format_uuid(&profile.id);
+                // let uuid = format_uuid(&profile.id);
+                let uuid = profile.id;
 
                 info!("Auth OK: {} ({})", profile.name, uuid);
                 let (encryptor, decryptor) = generate_pairs(&key)?;
@@ -257,7 +258,21 @@ impl State for LoginState {
                 // send to mojang
                 // if success, continue
                 _ctx.activate_compression().await?;
-                let packet = LoginSuccess::new(uuid, profile.name);
+                let packet = LoginSuccess::new(uuid.to_string(), profile.name);
+                _ctx.send_packet(packet).await?;
+
+                // In login phase, send the PlayerInfo
+                let packet = PlayerListItem::new(
+                    VarInt::new(0),
+                    vec![PlayerListItemData::new(
+                        profile.id,
+                        username.to_string(),
+                        profile.properties,
+                        Gamemode::new(GamemodeKind::Survival),
+                        VarInt::new(12),
+                        None,
+                    )],
+                );
                 _ctx.send_packet(packet).await?;
 
                 _ctx.tx.flush().await?;
@@ -295,6 +310,12 @@ impl State for PlayState {
         let packet = cobalt_net::packet::server::PlayerPositionAndLook::new(
             0f64, 64f64, 0f64, 0f32, 0f32, 0,
             // VarInt::new(0),
+        );
+        _ctx.send_packet(packet).await?;
+
+        let packet = EntityMetadata::new(
+            VarInt::new(21),
+            MetadataEntries(vec![MetadataEntry::Byte(10, 127)]),
         );
         _ctx.send_packet(packet).await?;
 
