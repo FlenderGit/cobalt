@@ -1,6 +1,8 @@
+use base64::Engine;
 use std::{
-    io,
+    fs, io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    path::Path,
     sync::{Arc, atomic::AtomicU32},
     time::Instant,
 };
@@ -23,7 +25,7 @@ use futures_util::stream::StreamExt;
 use tokio::{
     io::AsyncWriteExt,
     net::{TcpStream, tcp::OwnedReadHalf},
-    sync::RwLock,
+    sync::{RwLock, broadcast},
     time::Interval,
 };
 use tokio_util::{
@@ -31,6 +33,14 @@ use tokio_util::{
     codec::FramedRead,
 };
 use tracing::info;
+
+use crate::{
+    config::{AuthentificationConfig, ServerConfig},
+    entity_manager::EntityManager,
+    world::world_manager::WorldManager,
+};
+
+pub struct ServerContext {}
 
 pub struct ConnContext<W: AsyncWriteExt> {
     pub pending_keepalive: Option<(i32, Instant)>,
@@ -40,6 +50,7 @@ pub struct ConnContext<W: AsyncWriteExt> {
     pub tx: W,
     pub server_state: Arc<ServerState>,
     pub framed: FramedRead<OwnedReadHalf, MinecraftCodex>,
+    // pub event_rx: broadcast::Receiver<RawPacket>,
 }
 
 impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
@@ -55,7 +66,8 @@ impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
     pub async fn send_packet(&mut self, packet: impl PacketId) -> io::Result<()> {
         let payload = packet.to_bytes()?;
 
-        let mut inner = if let Some(threshold) = self.compression_threshold {
+        let inner = if let Some(threshold) = self.compression_threshold {
+            info!("Compress");
             compress_payload(payload, threshold)?
         } else {
             payload // Pas de compression
@@ -66,6 +78,7 @@ impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
         full_frame.put(inner);
 
         if let Some(crypto) = &mut self.session_crypto {
+            info!("Encrypt");
             full_frame = crypto.encryptor.encrypt_bytes(&full_frame)?;
         }
 
@@ -87,7 +100,7 @@ impl<W: AsyncWriteExt + Unpin> ConnContext<W> {
     }
 
     pub async fn activate_compression(&mut self) -> io::Result<()> {
-        let treshhold = self.server_state.config.threshold;
+        let treshhold = self.server_state.config.network.threshold;
         if treshhold == 0 {
             info!("Compression disabled");
             return Ok(());
@@ -105,61 +118,74 @@ pub struct ServerState {
     pub config: ServerConfig,
     pub player_count: AtomicU32,
     pub players: RwLock<Vec<u8>>,
+    pub entity_manager: Arc<EntityManager>,
+    pub world: Arc<WorldManager>,
+
+    pub crypto: Option<CryptoConfig>,
+    pub favicon: Option<String>,
+    // pub event_tx: broadcast::Sender<RawPacket>,
 }
 
 impl ServerState {
-    pub fn new(config: ServerConfig) -> Self {
-        Self {
+    pub fn new(config: ServerConfig, world: WorldManager) -> io::Result<Self> {
+        // let (tx, _rx) = broadcast::channel(1024);
+
+        let crypto = load_crypto_config(&config.auth)?;
+        let favicon = if let Some(ref path) = config.profile.icon {
+            load_favicon(path)?
+        } else {
+            None
+        };
+
+        Ok(Self {
             config,
-            ..Default::default()
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ServerConfig {
-    pub addr: SocketAddr,
-    pub name: String,
-    pub protocol_version: u32,
-    pub max_player_count: u32,
-    pub description: String,
-    pub favicon: Option<String>,
-    pub gamemode: Gamemode,
-    pub dimension: Dimension,
-    pub difficulty: Difficulty,
-    pub max_players: u8,
-    pub threshold: u32,
-    pub crypto: Option<CryptoConfig>,
-}
-
-impl ServerConfig {
-    pub fn new(addr: SocketAddr, crypto: Option<CryptoConfig>) -> Self {
-        Self {
-            addr,
             crypto,
+            world: Arc::new(world),
+            favicon,
             ..Default::default()
-        }
+        })
     }
 }
 
-impl Default for ServerConfig {
-    fn default() -> Self {
-        Self {
-            addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 25565)),
-            name: String::new(),
-            protocol_version: 47,
-            max_player_count: 20,
-            description: String::new(),
-            favicon: None,
-            gamemode: Gamemode {
-                mode: cobalt_sdk::GamemodeKind::Creative,
-                hardcore: false,
-            },
-            dimension: Dimension::Overworld,
-            difficulty: Difficulty::Easy,
-            max_players: 20,
-            threshold: 256,
-            crypto: None,
-        }
+pub fn load_favicon(path: impl AsRef<Path>) -> io::Result<Option<String>> {
+    let path = path.as_ref();
+
+    // Si pas de chemin configuré → pas de favicon
+    if !path.exists() {
+        return Ok(None);
     }
+
+    // Lecture du fichier PNG
+    let png_bytes = fs::read(path)?;
+
+    // Validation basique : header PNG
+    if &png_bytes[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} n'est pas un fichier PNG valide", path.display()),
+        ));
+    }
+
+    // Encodage base64 (crate `base64`)
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+
+    // Format requis par le protocole Minecraft
+    Ok(Some(format!("data:image/png;base64,{}", b64)))
+}
+
+pub fn load_crypto_config(auth: &AuthentificationConfig) -> io::Result<Option<CryptoConfig>> {
+    if !auth.enabled {
+        return Ok(None);
+    }
+
+    let (pub_path, priv_path) = auth
+        .public_key
+        .as_ref()
+        .zip(auth.private_key.as_ref())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Two key don't have value"))?;
+
+    let public_key_der = fs::read(&pub_path)?;
+    let private_key_pem = fs::read(&priv_path)?;
+
+    Ok(Some(CryptoConfig::new(&public_key_der, &private_key_pem)?))
 }

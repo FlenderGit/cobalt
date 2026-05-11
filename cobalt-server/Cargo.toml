@@ -12,8 +12,19 @@ cobalt-net = { path = "../cobalt-net" }
 cobalt-sdk = { path = "../cobalt-sdk" }
 enum_dispatch = "0.3.13"
 derive-new = { workspace = true }
-reqwest = { version = "0.13", features = ["json"] }
+flate2 = {workspace = true }
+serde_json = {workspace = true}
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "native-tls",
+] }
 serde = { workspace = true }
 uuid = { workspace = true }
 tokio-util = "0.7.18"
 futures-util = "0.3.32"
+parking_lot = "0.12.5"
+fastnbt = "2.6.1"
+dashmap = "6.1.0"
+bytemuck = "1.25.0"
+figment = { version = "0.10.19", features = ["env", "toml"] }
+base64 = "0.22.1"

@@ -1,25 +1,22 @@
 use std::{
-    io::{self, BufReader},
+    io::{self},
     sync::Arc,
     time::Duration,
 };
 
 use cobalt_protocol::{
-    Decode,
     codex::{DecryptingReader, MinecraftCodex},
     packet::{PacketError, RawPacket},
-    types::varint::VarInt,
 };
-use tokio::{
-    net::{TcpListener, TcpStream},
-    time::interval,
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::FramedRead;
 use tracing::{error, info, warn};
 
 use crate::{
-    context::{ConnContext, ServerConfig, ServerState},
+    config::ServerConfig,
+    context::{ConnContext, ServerState},
     states::{AState, HandshakeState, State, Transition},
+    world::world_manager::WorldManager,
 };
 
 pub struct Server {
@@ -27,15 +24,36 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: ServerConfig) -> Self {
-        Self {
-            state: Arc::new(ServerState::new(config)),
-        }
+    pub fn new(config: ServerConfig, world: WorldManager) -> io::Result<Self> {
+        let state = ServerState::new(config, world)?;
+        Ok(Self {
+            state: Arc::new(state),
+        })
     }
 
     pub async fn run(&self) -> Result<(), io::Error> {
-        let listener = TcpListener::bind(self.state.config.addr).await?;
-        info!("listening on {}", self.state.config.addr);
+        let listener = TcpListener::bind(self.state.config.network.addr).await?;
+
+        println!("{}", self.state.config);
+
+        info!("listening on {}", self.state.config.network.addr);
+
+        // Thread thread that emit each 20/s
+        // let state = self.state.clone();
+        // tokio::spawn(async move {
+        //     let mut interval = interval(Duration::from_secs_f64(1.0 / 20.0));
+        //     loop {
+        //         interval.tick().await;
+
+        //         // Detecter les joueurs qui ont bougés
+
+        //         // Obtenir la liste des joueurs qui voient le joueur
+
+        //         // Envoyer les données aux joueurs
+
+        //         // println!("tick");
+        //     }
+        // });
 
         loop {
             let (stream, peer_addr) = listener.accept().await?;
@@ -50,6 +68,8 @@ impl Server {
             });
         }
     }
+
+    pub async fn shutdown(&self) {}
 }
 
 async fn handle_client(stream: TcpStream, state: Arc<ServerState>) -> Result<(), PacketError> {
@@ -100,79 +120,20 @@ async fn handle_client(stream: TcpStream, state: Arc<ServerState>) -> Result<(),
                     }
                 }
             }
-            // _ = async {
-            //     if let Some(ref mut i) = keepalive_interval {
-            //         i.tick().await;
-            //     } else {
-            //         std::future::pending::<()>().await
-            //     }
-            // } => {
-            //     if let Err(e) = ctx.send_keepalive().await {
-            //         warn!("Failed to send keepalive: {}", e);
-            //         break;
-            //     }
-            // }
+            _ = async {
+                if let Some(ref mut i) = keepalive_interval {
+                    i.tick().await;
+                } else {
+                    std::future::pending::<()>().await
+                }
+            } => {
+                if let Err(e) = ctx.send_keepalive().await {
+                    warn!("Failed to send keepalive: {}", e);
+                    break;
+                }
+            }
         }
     }
-
-    // loop {
-    //     tokio::select! {
-    //         result = RawPacket::read_async(&mut reader) => {
-    //             let mut packet = match result {
-    //                 Err(PacketError::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-    //                 Err(e) => {
-    //                     error!("Error reading packet: {e}");
-    //                     continue;
-    //                 },
-    //                 Ok(packet) => packet,
-    //             };
-
-    //             if let Some(threshold) = ctx.compression_threshold {
-    //                 let mut bufreader = BufReader::new(&packet.data[..]);
-    //                 let varint = VarInt::decode(&mut bufreader)?;
-    //                 let varint_size = varint.len() as usize;
-    //                 let payload = &packet.data[varint_size..];
-
-    //                 // info!("Compression threshold: {threshold}, varint: {varint:?}, size: {varint_size}");
-    //                 if varint.val() == 0 {
-    //                     packet = RawPacket { data: payload.to_vec() };
-    //                 } else {
-    //                     packet = RawPacket { data: vec![] };
-    //                 }
-
-    //             }
-
-    //             info!("Packet: {:?}", packet);
-    //             if let Some(session_crypto) = ctx.session_crypto.as_mut() {
-    //                 session_crypto.decryptor.decrypt(&mut packet.data)?;
-    //                 info!("Decrypted packet: {:?}", packet);
-
-    //             }
-
-    //             match state.handle(packet, &mut ctx).await {
-    //                 Ok(transition) => match transition {
-    //                     Transition::Same => {}
-    //                     Transition::Next(mut next) => {
-    //                         info!("Transition from {state:?} to {next:?}");
-    //                         next.on_enter(&mut ctx).await.expect("3");
-    //                         state = next;
-    //                     }
-    //                     Transition::Exit => break,
-    //                 },
-    //                 Err(e) => {
-    //                     warn!("Error handling packet: {}", e);
-    //                 }
-    //             }
-    //         }
-    //         // _ = keepalive_interval.tick() => {
-    //         //     if let Err(e) = ctx.send_keepalive().await {
-    //         //         warn!("Failed to send keepalive: {}", e);
-    //         //         break; // Client probablement déconnecté
-    //         //     }
-    //         // }
-    //         else => break,
-    //     }
-    // }
 
     info!("Client disconnected, state: {state:?}");
 
