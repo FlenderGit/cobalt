@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/cobalt-server)](https://crates.io/crates/cobalt-server)
 [![Docs.rs](https://docs.rs/cobalt-server/badge.svg)](https://docs.rs/cobalt-server)
-[![CI](https://github.com/username/cobalt/actions/workflows/ci.yml/badge.svg)](https://github.com/username/cobalt/actions)
+[![CI](https://github.com/FlenderGit/cobalt/actions/workflows/ci.yml/badge.svg)](https://github.com/FlenderGit/cobalt/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Rust Version](https://img.shields.io/badge/rust-1.75%2B-orange)](https://www.rust-lang.org)
 
@@ -56,12 +56,12 @@ Cobalt is designed with the following principles in mind:
 
 ### Prebuilt binary
 
-Prebuilt binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/username/cobalt/releases) page.
+Prebuilt binaries for Linux, macOS, and Windows are available on the [Releases](https://github.com/FlenderGit/cobalt/releases) page.
 
 ### From source
 
 ```bash
-git clone https://github.com/username/cobalt.git
+git clone https://github.com/FlenderGit/cobalt.git
 cd cobalt
 cargo build --release
 ```
