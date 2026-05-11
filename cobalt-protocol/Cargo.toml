@@ -12,8 +12,10 @@ sync = []
 tracing = { workspace = true }
 tokio = { workspace = true, optional = true }
 thiserror = { workspace = true }
-flate2 = "1.1.9"
+flate2 = { workspace = true }
 openssl = "0.10.78"
 num-bigint = "0.4.6"
-tokio-util = "0.7.18"
+tokio-util = { version = "0.7.18", features = ["codec"] }
 bytes = "1.11.1"
+derive-new = { workspace = true }
+uuid = { workspace = true }

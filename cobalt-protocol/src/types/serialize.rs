@@ -1,7 +1,7 @@
+use bytes::BufMut;
 use bytes::BytesMut;
 use std::io::{self, Read, Result as IoResult};
 use tokio::io::AsyncReadExt;
-use tracing::info;
 
 use crate::types::varint::VarInt;
 
@@ -117,4 +117,18 @@ pub fn read_varint(src: &BytesMut) -> Option<(i32, usize)> {
         }
     }
     None
+}
+
+pub fn write_varint<B: BufMut>(dst: &mut B, mut value: i32) {
+    loop {
+        let mut byte = (value & 0x7F) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        dst.put_u8(byte);
+        if value == 0 {
+            break;
+        }
+    }
 }

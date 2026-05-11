@@ -1,7 +1,11 @@
-use crate::Encode;
+use crate::{
+    Encode,
+    types::serialize::{read_varint, write_varint},
+};
 use std::io::{self, Read, Write};
 
-use flate2::{Compression, write::ZlibEncoder};
+use bytes::{Buf, BufMut, BytesMut};
+use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 #[cfg(feature = "async")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -64,10 +68,6 @@ impl RawPacket {
         self.data.len()
     }
 
-    pub fn uncompress(&self, threshold: u32) -> Self {
-        todo!()
-    }
-
     #[cfg(feature = "sync")]
     pub fn read_sync<R: Read, P: ReadPacket>(reader: &mut R) -> Result<P, PacketError> {
         let varint = VarInt::read_sync(reader)?;
@@ -118,9 +118,10 @@ impl RawPacket {
 }
 
 // Create and send packets to the client/server
+#[derive(Debug)]
 pub struct Packet {
-    packet_id: i32,
-    data: Vec<u8>,
+    pub id: u8,
+    pub data: BytesMut,
 }
 
 pub fn compress_zlib(data: &[u8]) -> io::Result<Vec<u8>> {
@@ -128,18 +129,88 @@ pub fn compress_zlib(data: &[u8]) -> io::Result<Vec<u8>> {
     encoder.write_all(data)?;
     Ok(encoder.finish()?)
 }
+pub fn compress_zlib_bytes(data: &[u8]) -> io::Result<BytesMut> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data)?;
+    let compressed = encoder.finish()?;
+    Ok(BytesMut::from(compressed.as_slice()))
+}
+
+pub fn compress_payload(payload: BytesMut, threshold: u32) -> io::Result<BytesMut> {
+    if payload.len() < threshold as usize {
+        let mut inner = BytesMut::with_capacity(1 + payload.len());
+        write_varint(&mut inner, 0);
+        inner.put(payload);
+        Ok(inner)
+    } else {
+        let data_length = payload.len() as i32;
+        let compressed = compress_zlib_bytes(&payload)?;
+
+        let mut inner = BytesMut::with_capacity(5 + compressed.len());
+        write_varint(&mut inner, data_length);
+        inner.put(compressed);
+        Ok(inner)
+    }
+}
+
+pub fn decompress_packet(mut src: BytesMut) -> io::Result<BytesMut> {
+    let (data_length, varint_len) = read_varint(&src)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid data length varint"))?;
+    src.advance(varint_len);
+
+    if data_length == 0 {
+        return Ok(src);
+    }
+
+    let mut decoder = ZlibDecoder::new(&src[..]);
+    let mut decompressed = Vec::with_capacity(data_length as usize);
+    decoder.read_to_end(&mut decompressed)?;
+
+    Ok(BytesMut::from(decompressed.as_slice()))
+}
+
+// pub fn compress_packet(data: BytesMut, threshold: u32) -> io::Result<BytesMut> {
+//     let mut uncompressed = BytesMut::with_capacity(5 + data.len());
+//     write_varint(&mut uncompressed, self.id as i32);
+//     uncompressed.put(data);
+
+//     if uncompressed.len() < threshold as usize {
+//         let mut buf = BytesMut::with_capacity(1 + uncompressed.len());
+//         write_varint(&mut buf, 0); // data_length = 0
+//         buf.put(uncompressed);
+//         return Ok(buf);
+//     }
+
+//     // 2. Compresser
+//     let data_length = uncompressed.len() as i32;
+//     let compressed = compress_zlib_bytes(&uncompressed)?;
+
+//     // 3. Construire : VarInt(data_length) + compressed
+//     let mut buf = BytesMut::with_capacity(5 + compressed.len());
+//     write_varint(&mut buf, data_length);
+//     buf.put(compressed);
+
+//     Ok(buf)
+// }
 
 impl Packet {
-    pub fn new(packet_id: i32, data: Vec<u8>) -> Self {
-        Self { packet_id, data }
+    pub fn new(id: u8, data: Vec<u8>) -> Self {
+        Self {
+            id,
+            data: BytesMut::from(data.as_slice()),
+        }
+    }
+
+    pub fn new_with_bytes(id: u8, data: BytesMut) -> Self {
+        Self { id, data }
     }
 
     pub fn len(&self) -> usize {
-        VarInt::new(self.packet_id).len() as usize + self.data.len()
+        VarInt::new(self.id as i32).len() as usize + self.data.len()
     }
 
     pub fn to_raw(self) -> RawPacket {
-        let packet_id_varint = VarInt::new(self.packet_id);
+        let packet_id_varint = VarInt::new(self.id as i32);
 
         let payload_length = self.data.len();
         let total_length = packet_id_varint.len() as usize + payload_length;
@@ -157,8 +228,8 @@ impl Packet {
         RawPacket { data: buf }
     }
 
-    pub fn compress(self, threshold: u32) -> io::Result<RawPacket> {
-        let packet_id_varint = VarInt::new(self.packet_id);
+    pub fn compress(self, _threshold: u32) -> io::Result<RawPacket> {
+        let packet_id_varint = VarInt::new(self.id as i32);
         let mut uncompressed =
             Vec::with_capacity(packet_id_varint.len() as usize + self.data.len());
         packet_id_varint.encode(&mut uncompressed)?;
@@ -177,14 +248,14 @@ impl Packet {
 
     pub async fn into_raw(self) -> Result<RawPacket, PacketError> {
         let mut buf = Vec::with_capacity(5 + self.data.len());
-        VarInt::new(self.packet_id).encode(&mut buf)?;
+        VarInt::new(self.id as i32).encode(&mut buf)?;
         buf.extend_from_slice(&self.data);
         Ok(RawPacket { data: buf })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
         // Encoder le packet_id en VarInt
-        let packet_id_bytes = VarInt::from(self.packet_id).to_bytes();
+        let packet_id_bytes = VarInt::from(self.id as i32).to_bytes();
 
         // La longueur = taille(packet_id encodé) + taille(data)
         let length = VarInt::from((packet_id_bytes.len() + self.data.len()) as i32);

@@ -7,3 +7,4 @@ edition = "2024"
 cobalt-protocol = { path = "../cobalt-protocol" }
 tokio = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }

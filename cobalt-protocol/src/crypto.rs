@@ -1,5 +1,6 @@
 use std::io;
 
+use bytes::BytesMut;
 use num_bigint::BigInt;
 use openssl::{
     pkey::Private,
@@ -37,16 +38,13 @@ impl CryptoConfig {
 
 pub struct SessionCrypto {
     pub encryptor: Cfb8Encryptor,
-    pub decryptor: Cfb8Decryptor,
 }
 
-impl SessionCrypto {
-    pub fn new(shared_secret: &[u8; 16]) -> io::Result<Self> {
-        Ok(Self {
-            encryptor: Cfb8Encryptor::new(shared_secret)?,
-            decryptor: Cfb8Decryptor::new(shared_secret)?,
-        })
-    }
+pub fn generate_pairs(shared_secret: &[u8; 16]) -> io::Result<(Cfb8Encryptor, Cfb8Decryptor)> {
+    Ok((
+        Cfb8Encryptor::new(shared_secret)?,
+        Cfb8Decryptor::new(shared_secret)?,
+    ))
 }
 
 pub struct Cfb8Encryptor {
@@ -73,6 +71,17 @@ impl Cfb8Encryptor {
         output.truncate(n);
         Ok(output)
     }
+
+    /// Encrypt a slice of plaintext bytes in-place.
+    pub fn encrypt_bytes(&mut self, plaintext: &[u8]) -> io::Result<BytesMut> {
+        let mut output = BytesMut::zeroed(plaintext.len() + 16);
+        let n = self
+            .crypter
+            .update(plaintext, &mut output)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        output.truncate(n);
+        Ok(output)
+    }
 }
 
 pub struct Cfb8Decryptor {
@@ -89,6 +98,12 @@ impl Cfb8Decryptor {
         Ok(Self { crypter })
     }
 
+    pub fn update(&mut self, ciphertext: &[u8], output: &mut [u8]) -> io::Result<usize> {
+        self.crypter
+            .update(ciphertext, output)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
     /// Decrypt a slice of ciphertext bytes, returning the plaintext.
     pub fn decrypt(&mut self, ciphertext: &[u8]) -> io::Result<Vec<u8>> {
         let mut output = vec![0u8; ciphertext.len() + 16];
@@ -96,6 +111,25 @@ impl Cfb8Decryptor {
             .crypter
             .update(ciphertext, &mut output)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        output.truncate(n);
+        Ok(output)
+    }
+
+    pub fn decrypt_bytes(&mut self, ciphertext: &[u8]) -> io::Result<BytesMut> {
+        let mut output = BytesMut::zeroed(ciphertext.len());
+
+        let n = self
+            .crypter
+            .update(ciphertext, &mut output)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        if n != ciphertext.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Decryption altered length: {} -> {}", ciphertext.len(), n),
+            ));
+        }
+
         output.truncate(n);
         Ok(output)
     }

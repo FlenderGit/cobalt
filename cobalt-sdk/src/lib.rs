@@ -1,15 +1,14 @@
 use std::{
     fmt::Display,
-    fs::write,
     io::{self, Write},
 };
 
-use cobalt_protocol::{
-    Decode, Encode, MAX_STRING_LENGTH, deserialize_string_with_max, types::varint::VarInt,
-};
+use cobalt_protocol::{Decode, Encode, MAX_STRING_LENGTH, deserialize_string_with_max};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[repr(u8)]
+#[serde(rename_all = "snake_case")]
 pub enum Difficulty {
     Peaceful = 0,
     Easy = 1,
@@ -26,48 +25,50 @@ impl Encode for Difficulty {
 
 impl Decode for Difficulty {
     fn decode<R: io::Read + Unpin>(reader: &mut R) -> io::Result<Self> {
-        let value = u8::decode(reader)?;
+        let _value = u8::decode(reader)?;
         todo!()
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct Gamemode {
-    pub mode: GamemodeKind,
-    pub hardcore: bool,
-}
-
-impl Gamemode {
-    pub fn new(mode: GamemodeKind) -> Self {
-        Self {
-            mode,
-            hardcore: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum GamemodeKind {
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Gamemode {
     Survival = 0,
     Creative = 1,
     Adventure = 2,
     Spectator = 3,
 }
 
-impl Encode for Gamemode {
+#[derive(Debug)]
+pub struct GamemodeState {
+    pub gamemode: Gamemode,
+    pub hardcore: bool,
+}
+
+impl GamemodeState {
+    pub fn new(gamemode: Gamemode) -> Self {
+        Self {
+            gamemode,
+            hardcore: false,
+        }
+    }
+}
+
+impl Encode for GamemodeState {
     fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        let value = self.mode as u8 | if self.hardcore { 0x8 } else { 0 };
+        let value = self.gamemode as u8 | if self.hardcore { 0x8 } else { 0 };
         u8::encode(&value, writer)
     }
 }
 
-impl Decode for Gamemode {
-    fn decode<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+impl Decode for GamemodeState {
+    fn decode<R: io::Read>(_reader: &mut R) -> io::Result<Self> {
         todo!()
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Dimension {
     Overworld = 0,
     Nether = -1,
@@ -82,7 +83,7 @@ impl Encode for Dimension {
 }
 
 impl Decode for Dimension {
-    fn decode<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+    fn decode<R: io::Read>(_reader: &mut R) -> io::Result<Self> {
         todo!()
     }
 }
@@ -108,7 +109,7 @@ impl Encode for WorldType {
 }
 
 impl Decode for WorldType {
-    fn decode<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+    fn decode<R: io::Read>(_reader: &mut R) -> io::Result<Self> {
         todo!()
     }
 }
@@ -241,7 +242,7 @@ impl Encode for ItemStack {
 }
 
 impl Decode for ItemStack {
-    fn decode<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+    fn decode<R: io::Read>(_reader: &mut R) -> io::Result<Self> {
         todo!()
     }
 }

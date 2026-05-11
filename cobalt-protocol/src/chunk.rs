@@ -25,11 +25,10 @@ impl ChunkBuilder {
                 continue;
             }
 
-            // --- 1. BLOCKS (8192 bytes per section) ---
             for y in 0..16 {
                 let global_y = section_idx * 16 + y;
-                for z in 0..16 {
-                    for x in 0..16 {
+                for _ in 0..16 {
+                    for _ in 0..16 {
                         let id: u16 = match global_y {
                             0 => 7,     // Bedrock
                             1..=4 => 1, // Stone
@@ -37,22 +36,19 @@ impl ChunkBuilder {
                             6 => 2,     // Grass
                             _ => 0,     // Air
                         };
-                        // Format 1.8: ID est sur les 12 bits de poids fort, meta sur les 4 faibles
                         let block_data = id << 4 | 0;
-                        // Little Endian pour les blocs en 1.8
                         all_blocks.extend_from_slice(&block_data.to_le_bytes());
                     }
                 }
             }
 
             // --- 2. BLOCK LIGHT (2048 bytes) ---
-            all_block_light.extend_from_slice(&[0x00u8; 2048]); // Noir
+            all_block_light.extend_from_slice(&[0x00u8; 2048]);
 
             // --- 3. SKY LIGHT (2048 bytes) ---
-            all_sky_light.extend_from_slice(&[0xFFu8; 2048]); // Plein jour (0xFF = 15/15 pour 2 blocs)
+            all_sky_light.extend_from_slice(&[0xFFu8; 2048]);
         }
 
-        // Assemblage final dans l'ordre strict de la 1.8
         let mut raw = Vec::new();
         raw.extend(all_blocks);
         raw.extend(all_block_light);
@@ -60,7 +56,6 @@ impl ChunkBuilder {
             raw.extend(all_sky_light);
         }
 
-        // 4. BIOMES (256 bytes) - Seulement si c'est un "Ground-Up Continuous" chunk
         raw.extend_from_slice(&[1u8; 256]); // Plains
 
         raw

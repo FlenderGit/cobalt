@@ -9,3 +9,6 @@ cobalt-protocol = { path = "../cobalt-protocol" }
 cobalt-sdk = { path = "../cobalt-sdk" }
 cobalt-derive = { path = "../cobalt-derive" }
 derive-new= { workspace = true }
+uuid = { workspace = true }
+
+serde = { workspace = true }

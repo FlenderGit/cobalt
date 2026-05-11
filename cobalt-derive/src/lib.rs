@@ -68,7 +68,7 @@ fn expand_packet_struct(
         }
 
         impl cobalt_protocol::PacketId for #struct_name {
-            const ID: i32 = #packet_id;
+            const ID: u8 = #packet_id;
         }
 
         impl cobalt_protocol::Decode for #struct_name {
@@ -156,15 +156,122 @@ fn expand_packet_enum(
             }
         }
 
-        impl cobalt_protocol::Decode for #enum_name {
-            fn decode<R: std::io::Read + Unpin>(reader: &mut R) -> std::io::Result<Self> {
-                let packet_id = cobalt_protocol::types::varint::VarInt::decode(reader)?.val() as u32;
-                match packet_id {
+        impl cobalt_protocol::DecodeWithId for #enum_name {
+            fn decode_with_id<R: std::io::Read + Unpin>(id: u8, reader: &mut R) -> std::io::Result<Self> {
+                match id {
                     #(#arms_decode)*
-                    id => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Unknown packet id {}", id)))
+                    id => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Unknown packet id {}", id)
+                    ))
                 }
             }
         }
 
     })
+}
+
+#[proc_macro_derive(EncodeTrait)]
+pub fn derive_encode(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_encode(&input) {
+        Ok(token_stream) => token_stream.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_encode(input: &DeriveInput) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let name = &input.ident;
+
+    let expanded = match &input.data {
+        Data::Struct(data_struct) => {
+            let encode_stmts = data_struct.fields.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap(); // On suppose des champs nommés
+                quote! {
+                    cobalt_protocol::Encode::encode(&self.#field_name, writer)?;
+                }
+            });
+
+            quote! {
+                impl cobalt_protocol::Encode for #name {
+                    fn encode<W: ::std::io::Write>(&self, writer: &mut W) -> ::std::io::Result<()> {
+                        #(#encode_stmts)*
+                        Ok(())
+                    }
+                }
+            }
+        }
+        Data::Enum(_) => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "Encode can only be derived for structs or enums (this example shows struct only). Implementing for enums would require more complex logic.",
+            ));
+        }
+        Data::Union(_) => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "Encode cannot be derived for unions.",
+            ));
+        }
+    };
+
+    Ok(expanded)
+}
+
+#[proc_macro_derive(DecodeTrait)]
+pub fn derive_decode(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    match expand_decode(&input) {
+        Ok(token_stream) => token_stream.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_decode(input: &DeriveInput) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let name = &input.ident;
+
+    match &input.data {
+        Data::Struct(data_struct) => {
+            let fields = match &data_struct.fields {
+                Fields::Named(f) => &f.named,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        input,
+                        "DecodeTrait ne supporte que les structs avec des champs nommés",
+                    ));
+                }
+            };
+
+            let field_names: Vec<_> = fields
+                .iter()
+                .map(|field| field.ident.as_ref().unwrap())
+                .collect();
+
+            let decode_stmts = fields.iter().map(|field| {
+                let field_name = field.ident.as_ref().unwrap();
+                quote! {
+                    let #field_name = <_ as cobalt_protocol::Decode>::decode(reader)?;
+                }
+            });
+
+            Ok(quote! {
+                impl cobalt_protocol::Decode for #name {
+                    fn decode<R: ::std::io::Read + Unpin>(reader: &mut R) -> ::std::io::Result<Self> {
+                        #(#decode_stmts)*
+                        Ok(Self {
+                            #(#field_names),*
+                        })
+                    }
+                }
+            })
+        }
+        Data::Enum(_) => Err(syn::Error::new_spanned(
+            input,
+            "DecodeTrait ne supporte pas les enums (implémentation manuelle requise)",
+        )),
+        Data::Union(_) => Err(syn::Error::new_spanned(
+            input,
+            "DecodeTrait ne supporte pas les unions",
+        )),
+    }
 }

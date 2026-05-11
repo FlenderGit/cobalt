@@ -1,8 +1,11 @@
 use std::io::{self, Read, Write};
 
+use bytes::{BufMut, BytesMut};
+use uuid::Uuid;
+
 use crate::{
-    packet::{Packet, RawPacket},
-    types::varint::VarInt,
+    packet::RawPacket,
+    types::{serialize::write_varint, varint::VarInt},
 };
 
 pub mod chunk;
@@ -24,13 +27,33 @@ pub trait Decode: Sized {
     fn decode<R: Read + Unpin>(reader: &mut R) -> io::Result<Self>;
 }
 
-pub trait PacketId: Encode {
-    const ID: i32;
+pub trait DecodeWithId: Sized {
+    fn decode_with_id<R: Read + Unpin>(id: u8, reader: &mut R) -> io::Result<Self>;
+}
 
-    fn to_packet(&self) -> io::Result<Packet> {
-        let mut buf = Vec::with_capacity(32);
-        self.encode(&mut buf)?;
-        Ok(Packet::new(Self::ID, buf))
+pub trait PacketId: Encode {
+    const ID: u8;
+
+    // fn to_bytes(&self) -> io::Result<BytesMut> {
+    //     let mut payload = BytesMut::with_capacity(64);
+    //     write_varint(&mut payload, Self::ID as i32);
+    //     let mut writer = payload.writer();
+    //     self.encode(&mut writer)?;
+    //     let payload = writer.into_inner();
+
+    //     let mut frame = BytesMut::with_capacity(5 + payload.len());
+    //     write_varint(&mut frame, payload.len() as i32);
+    //     frame.put(payload);
+
+    //     Ok(frame)
+    // }
+
+    fn to_bytes(&self) -> io::Result<BytesMut> {
+        let mut buf = BytesMut::with_capacity(64);
+        write_varint(&mut buf, Self::ID as i32); // id seulement
+        let mut writer = buf.writer();
+        self.encode(&mut writer)?;
+        Ok(writer.into_inner()) // retourne [ VarInt(id) | data ] sans length
     }
 }
 
@@ -77,6 +100,7 @@ impl_primitive!(i32);
 impl_primitive!(i64);
 impl_primitive!(f64);
 impl_primitive!(f32);
+impl_primitive!(u16);
 
 pub const MAX_STRING_LENGTH: usize = 32767;
 pub fn serialize_string_with_max<W: Write>(
@@ -160,26 +184,6 @@ impl Decode for VarInt {
     }
 }
 
-impl Encode for Vec<u8> {
-    fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        // Can be without prefix length, like channel
-        let len = VarInt::new(self.len() as i32);
-        println!("len packet: {:?} -- {:?}", len.to_bytes(), len.val());
-        len.encode(writer)?;
-        writer.write_all(self)
-    }
-}
-
-impl Decode for Vec<u8> {
-    fn decode<R: Read + Unpin>(reader: &mut R) -> io::Result<Self> {
-        let var_int = VarInt::decode(reader)?;
-        let len = var_int.val() as usize;
-        let mut buf = vec![0u8; len];
-        reader.read_exact(&mut buf)?;
-        Ok(buf)
-    }
-}
-
 #[derive(Debug)]
 pub struct RawBytesArray(pub Vec<u8>);
 
@@ -198,3 +202,66 @@ impl Decode for RawBytesArray {
 }
 
 pub struct Chunk {}
+
+impl Encode for Uuid {
+    fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_all(self.as_bytes())
+    }
+}
+
+impl Decode for Uuid {
+    fn decode<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut bytes = [0u8; 16];
+        reader.read_exact(&mut bytes)?;
+        Ok(Uuid::from_bytes(bytes))
+    }
+}
+
+impl<T: Encode> Encode for Option<T> {
+    fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        match self {
+            Some(v) => {
+                bool::encode(&true, writer)?;
+                v.encode(writer)?;
+                Ok(())
+            }
+            None => {
+                bool::encode(&false, writer)?;
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<D: Decode> Decode for Option<D> {
+    fn decode<R: Read + Unpin>(reader: &mut R) -> io::Result<Self> {
+        let present = u8::decode(reader)?;
+        if present != 0 {
+            Ok(Some(D::decode(reader)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl<T: Encode> Encode for Vec<T> {
+    fn encode<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let len = VarInt::new(self.len() as i32);
+        len.encode(writer)?;
+        for item in self {
+            item.encode(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl<D: Decode> Decode for Vec<D> {
+    fn decode<R: Read + Unpin>(reader: &mut R) -> io::Result<Self> {
+        let len = VarInt::decode(reader)?;
+        let mut vec = Vec::with_capacity(len.val() as usize);
+        for _ in 0..len.val() {
+            vec.push(D::decode(reader)?);
+        }
+        Ok(vec)
+    }
+}
